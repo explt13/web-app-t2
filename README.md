@@ -1,38 +1,80 @@
 # Видно горы?
 
-В Алматы качество воздуха проще всего проверить, выглянув в окно: если горы видно, значит дышать можно, если нет, над городом смог. Этот сервис собирает такие наблюдения по районам и выдаёт сводку за сегодня.
+В Алматы качество воздуха проще всего проверить, выглянув в окно: если горы видно, дышать можно, если нет, над городом смог. Этот сервис собирает такие наблюдения от жителей по районам и выдаёт сводку за сегодня.
 
-Два контейнера: API на Node.js (Express) и PostgreSQL.
+REST API на Node.js (Express) и PostgreSQL, всё запускается через Docker Compose.
+
+## Архитектура
+
+```
+  Postman / браузер
+        │  localhost:8080
+        ▼
+┌──────────────┐   сеть backend   ┌──────────────┐
+│ api          │ ───────────────▶ │ db           │
+│ Node.js      │     db:5432      │ PostgreSQL   │
+│ порт 3000    │                  │              │
+└──────────────┘                  └──────┬───────┘
+                                         │
+                                  volume pgdata
+```
+
+- `api` собирается из `api/Dockerfile`, наружу открыт только его порт (`APP_PORT` → 3000).
+- `db` — официальный образ `postgres:17-alpine`, снаружи недоступен. API обращается к нему по имени сервиса `db` внутри сети `backend`.
+- Данные базы лежат в named volume `pgdata` и переживают пересоздание контейнеров.
+- `api` стартует только после того, как healthcheck базы (`pg_isready`) прошёл успешно.
+- При первом запуске `db/init.sql` создаёт таблицы `districts` и `reports` и заполняет районы.
 
 ## Запуск
 
 ```bash
 cp .env.example .env    # и поменять пароль
-docker compose up --build
+docker compose up
 ```
 
-API будет на http://localhost:8080 (порт меняется через `APP_PORT` в `.env`).
+API будет доступен на http://localhost:8080. После изменений в коде запускать с `--build`.
 
-## Эндпоинты
+Остановить: `Ctrl + C`, затем `docker compose down`. Данные останутся в volume. Полностью сбросить базу: `docker compose down -v`.
 
-| Метод | Путь | Что делает |
+## Переменные окружения
+
+| Переменная | Где используется | Пример |
 |---|---|---|
-| GET | `/districts` | список районов Алматы |
-| POST | `/reports` | добавить наблюдение |
-| GET | `/reports?district=medeu&limit=10` | последние наблюдения |
-| GET | `/today` | сводка за сегодня по городу и районам |
+| `POSTGRES_DB` | имя базы, для db и api | `vidno_gory` |
+| `POSTGRES_USER` | пользователь базы | `gory` |
+| `POSTGRES_PASSWORD` | пароль базы | — |
+| `APP_PORT` | порт API на хосте | `8080` |
+
+В контейнер `api` они попадают как `DB_NAME`, `DB_USER`, `DB_PASSWORD`, плюс `DB_HOST=db` и `DB_PORT=5432` (см. `compose.yaml`). `.env` в Git не коммитится, в репозитории только `.env.example`.
+
+## API
+
+| Метод | Путь | Описание |
+|---|---|---|
+| GET | `/reports` | список наблюдений |
+| GET | `/reports/:id` | наблюдение по id |
+| POST | `/reports` | создать наблюдение |
+| PUT | `/reports/:id` | изменить наблюдение |
+| DELETE | `/reports/:id` | удалить наблюдение |
+| GET | `/districts` | районы Алматы |
+| GET | `/today` | сводка видимости гор за сегодня |
 | GET | `/health` | проверка связи с базой |
 
-`visibility` принимает `yes` (видно), `partly` (дымка) или `no` (не видно).
+Подробное описание с примерами: [docs/API.md](docs/API.md).
 
+Postman-коллекция: [postman/vidno-gory.postman_collection.json](postman/vidno-gory.postman_collection.json). В Postman: Import → выбрать файл. Адрес сервера задаётся переменной коллекции `baseUrl`.
 
 ## Структура
 
 ```
 compose.yaml
 .env.example
-db/init.sql          схема и список районов
+db/init.sql                  схема базы и список районов
 api/Dockerfile
-api/src/server.js    эндпоинты
-api/src/db.js        подключение к Postgres из переменных окружения
+api/.dockerignore
+api/package.json
+api/src/server.js            эндпоинты
+api/src/db.js                подключение к Postgres
+docs/API.md                  документация API
+postman/                     коллекция для Postman
 ```
